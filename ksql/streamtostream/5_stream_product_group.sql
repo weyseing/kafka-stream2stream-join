@@ -1,0 +1,1 @@
+CREATE STREAM streamtostream_stream_product_group WITH (KAFKA_TOPIC='source_debezium.local_db.db_data.product_group', VALUE_FORMAT='AVRO');

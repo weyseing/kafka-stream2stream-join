@@ -1,0 +1,1 @@
+CREATE STREAM streamtostream_stream_buyer WITH (KAFKA_TOPIC='source_debezium.local_db.db_data.buyer', VALUE_FORMAT='AVRO');

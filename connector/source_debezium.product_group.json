@@ -1,0 +1,60 @@
+{
+  "connector.class": "io.debezium.connector.mysql.MySqlConnector",
+
+  "database.hostname": "$DB_LOCAL_URL",
+  "database.port": "$DB_LOCAL_PORT",
+  "database.user": "$DB_LOCAL_USER",
+  "database.password": "$DB_LOCAL_PASS",
+  "database.ssl.mode": "preferred",
+  "database.server.id": "DEFAULT",
+
+  "database.include.list": "db_data",
+  "table.include.list": "db_data.product_group",
+
+  "snapshot.mode": "when_needed",
+  "snapshot.locking.mode": "none",
+  "snapshot.select.statement.overrides": "db_data.product_group",
+  "snapshot.select.statement.overrides.db_data.product_group": "SELECT * FROM db_data.product_group;",
+
+  "heartbeat.interval.ms": "10000",
+  "heartbeat.action.query": "SELECT * FROM db_data.product_group LIMIT 1;",
+
+  "tombstones.on.delete": "false",
+  "topic.prefix": "DEFAULT",
+
+  "value.converter.schemas.enable": "true",
+  "value.converter": "io.confluent.connect.avro.AvroConverter",
+  "value.converter.schema.registry.url": "$SCHEMA_REGISTRY_URL",
+  "value.converter.basic.auth.credentials.source": "USER_INFO",
+  "value.converter.schema.registry.basic.auth.user.info": "$SCHEMA_REGISTRY_SECRET",
+
+  "key.converter.schemas.enable": "true",
+  "key.converter": "io.confluent.connect.avro.AvroConverter",
+  "key.converter.schema.registry.url": "$SCHEMA_REGISTRY_URL",
+  "key.converter.basic.auth.credentials.source": "USER_INFO",
+  "key.converter.schema.registry.basic.auth.user.info": "$SCHEMA_REGISTRY_SECRET",
+
+  "errors.log.enable": "true",
+  "errors.tolerance": "all",
+  "errors.deadletterqueue.context.headers.enable": "true",
+  "errors.deadletterqueue.topic.name": "DEFAULT",
+  "errors.deadletterqueue.topic.replication.factor": "$TOPIC_REPLICATION",
+
+  "topic.creation.enable": "true",
+  "topic.creation.default.partitions": "$TOPIC_PARTITION",
+  "topic.creation.default.replication.factor": "$TOPIC_REPLICATION",
+
+  "schema.history.internal.kafka.topic": "DEFAULT",
+  "schema.history.internal.kafka.bootstrap.servers": "$BROKER_ENDPOINT",
+
+  "schema.history.internal.consumer.security.protocol": "$BROKER_SECURITY_PROTOCOL",
+  "schema.history.internal.consumer.ssl.endpoint.identification.algorithm": "https",
+  "schema.history.internal.consumer.sasl.mechanism": "PLAIN",
+  "schema.history.internal.consumer.sasl.jaas.config": "org.apache.kafka.common.security.plain.PlainLoginModule required username='$BROKER_API_KEY' password='$BROKER_API_SECRET';",
+
+  "schema.history.internal.producer.security.protocol": "$BROKER_SECURITY_PROTOCOL",
+  "schema.history.internal.producer.ssl.endpoint.identification.algorithm": "https",
+  "schema.history.internal.producer.sasl.mechanism": "PLAIN",
+  "schema.history.internal.producer.sasl.jaas.config": "org.apache.kafka.common.security.plain.PlainLoginModule required username='$BROKER_API_KEY' password='$BROKER_API_SECRET';"
+}
+

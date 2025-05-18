@@ -80,8 +80,6 @@
     - **Result:** The new order row appears with its columns and all unmatched columns from buyer and product_group as null, as FULL OUTER JOIN outputs every row from every stream, joined if possible, and null if not.
 
 ### Match 1 Stream
-If you insert data that matches in only one of the other streams, you’ll get a partially joined result—some fields have data, others are still null.
-
 - Match 2nd stream
     > ```sql
     > INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('11', 'Gizmo', '2', '4', '6', '2024-05-12 10:30:00');
@@ -109,7 +107,6 @@ If you insert data that matches in only one of the other streams, you’ll get a
     - **Result:** The order record finds a match in product_group (right side of the second FULL OUTER JOIN) and outputs a partially filled row, while unmatched buyer columns remain null, again because FULL OUTER JOIN outputs all possible combinations with nulls for non-matching sides.
 
 ### Match ALL stream
-If you insert matching data into all related tables, you get a fully joined result where all columns have values:
 > ```sql
 > INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('5', 'Charlie5', '2024-05-12 12:30:00');
 > INSERT INTO `product_group` (`id`, `name`, `create_date`) VALUES ('6', 'Clothing6', '2024-05-12 12:30:00');

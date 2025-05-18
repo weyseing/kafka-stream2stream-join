@@ -1,7 +1,9 @@
 DROP STREAM streamtostream_stream_join;
+DROP STREAM streamtostream_stream_supplier_intake;
 DROP STREAM streamtostream_stream_product_group_intake;
 DROP STREAM streamtostream_stream_buyer_intake;
 DROP STREAM streamtostream_stream_order_intake;
+DROP STREAM streamtostream_stream_supplier;
 DROP STREAM streamtostream_stream_product_group;
 DROP STREAM streamtostream_stream_buyer;
 DROP STREAM streamtostream_stream_order;

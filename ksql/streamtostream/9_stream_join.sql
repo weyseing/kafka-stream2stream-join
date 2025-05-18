@@ -16,11 +16,22 @@ SELECT
     o.product_group_id AS o_product_group_id,
     p.id AS p_product_group_id,
     p.name AS product_group_name,
-    p.create_date AS p_create_date
+    p.create_date AS p_create_date,
+
+    -- supplier
+    p.supplier_id AS o_supplier_id,
+    s.id AS s_supplier_id,
+    s.name AS supplier_name,
+    s.create_date AS s_create_date
+
 FROM streamtostream_stream_order_intake o
-RIGHT JOIN streamtostream_stream_buyer_intake b -- EDIT HERE
+LEFT JOIN streamtostream_stream_buyer_intake b
     WITHIN (5 MINUTES, 10 MINUTES)
     ON o.buyer_id = b.id
-RIGHT JOIN streamtostream_stream_product_group_intake p -- EDIT HERE
+LEFT JOIN streamtostream_stream_product_group_intake p
     WITHIN (15 MINUTES, 30 MINUTES)
-    ON o.product_group_id = p.id;
+    ON o.product_group_id = p.id
+LEFT JOIN streamtostream_stream_supplier_intake s
+    WITHIN (20 MINUTES, 40 MINUTES)
+    ON p.supplier_id = s.id
+EMIT CHANGES;

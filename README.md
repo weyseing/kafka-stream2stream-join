@@ -12,310 +12,171 @@
     - `LEFT JOIN` / `LEFT OUTER JOIN`
     - `RIGHT JOIN` / `RIGHT OUTER JOIN`
 
-# OUTER JOIN
-### Setup
-- Must have **ROWKEY** for **OUTER JOIN**.
-    > ```sql
-    > SELECT ROWKEY AS join_rowkey
-    > ```
+# JOIN Flow
+- In ksqlDB, **which stream** the event comes from **affects how the joins are processed**, according to the pattern `(((A JOIN B) JOIN C) JOIN D)`.
+- **Event from C:** If it can't match with results from streams A and B, it stops and won't be joined with D.
+- **Event from D:** It always tries to join with previous streams, no matter what happened before, but only produces a result if everything matches in the end.
 
-- Ensure delete dummy data to avoid conflict.
+# Example: Event from Stream C
+- Ensure **remove dummy data** to avoid conflict.
     > ```sql
     > DELETE FROM `order` WHERE id > 9;
     > DELETE FROM `buyer` WHERE id > 3;
     > DELETE FROM `product_group` WHERE id > 4;
+    > DELETE FROM `supplier` WHERE id > 3;
     > ```
 
-- Ensure recreate streams below to avoid conflict.
+- Ensure **recreate streams** to avoid conflict.
     > ```sql
     > DROP STREAM streamtostream_stream_join;
+    > DROP STREAM streamtostream_stream_supplier_intake;
     > DROP STREAM streamtostream_stream_product_group_intake;
     > DROP STREAM streamtostream_stream_buyer_intake;
     > DROP STREAM streamtostream_stream_order_intake;
     > ```
 
-- Check result.
+- Create **JOIN stream** below.
     > ```sql
-    > SELECT * FROM streamtostream_stream_join EMIT CHANGES;
+    > CREATE STREAM streamtostream_stream_join WITH 
+    > (KAFKA_TOPIC='streamtostream_stream_join', VALUE_FORMAT='AVRO') AS
+    > SELECT 
+    >     -- ROWKEY AS join_rowkey, -- only for OUTER JOIN
+    >     o.id AS order_id,
+    >     o.product AS product,
+    >     o.create_date AS o_create_date,
+    >     
+    >     -- buyer
+    >     o.buyer_id AS o_buyer_id,
+    >     b.id AS b_buyer_id,
+    >     b.name AS buyer_name,
+    >     b.create_date AS b_create_date,
+    >     
+    >     -- product group
+    >     o.product_group_id AS o_product_group_id,
+    >     p.id AS p_product_group_id,
+    >     p.name AS product_group_name,
+    >     p.create_date AS p_create_date,
+    > 
+    >     -- supplier
+    >     p.supplier_id AS o_supplier_id,
+    >     s.id AS s_supplier_id,
+    >     s.name AS supplier_name,
+    >     s.create_date AS s_create_date
+    > 
+    > FROM streamtostream_stream_order_intake o
+    > LEFT JOIN streamtostream_stream_buyer_intake b
+    >     WITHIN (5 MINUTES, 10 MINUTES)
+    >     ON o.buyer_id = b.id
+    > RIGHT JOIN streamtostream_stream_product_group_intake p
+    >     WITHIN (15 MINUTES, 30 MINUTES)
+    >     ON o.product_group_id = p.id
+    > LEFT JOIN streamtostream_stream_supplier_intake s
+    >     WITHIN (20 MINUTES, 40 MINUTES)
+    >     ON p.supplier_id = s.id
+    > EMIT CHANGES;
     > ```
 
-### No matching
-- 2nd stream
+- Pull request to JOIN stream to **check result**.
+    ```sql
+    SELECT * FROM streamtostream_stream_join EMIT CHANGES;
+    ```
+
+- Insert **dummy data**.
     > ```sql
-    > INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('4', 'Charlie4', '2024-05-12 10:30:00');
+    > INSERT INTO `supplier` (`id`, `name`, `create_date`) VALUES ('4', 'TopSupplies4', '2024-05-13 09:30:00');
+    > INSERT INTO `product_group` (`id`, `name`, `supplier_id`, `create_date`) VALUES ('5', 'Clothing5', '4', '2024-05-13 09:30:00');
     > ```
-    > ```
-    > +---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+
-    > |JOIN_ROWKEY          |ORDER_ID             |PRODUCT              |O_CREATE_DATE        |O_BUYER_ID           |B_BUYER_ID           |BUYER_NAME           |B_CREATE_DATE        |O_PRODUCT_GROUP_ID   |P_PRODUCT_GROUP_ID   |PRODUCT_GROUP_NAME   |P_CREATE_DATE        |
-    > +---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+
-    > |null                 |null                 |null                 |null                 |null                 |4                    |Charlie4             |2024-05-12T10:30:00.0|null                 |null                 |null                 |null                 |
-    > |                     |                     |                     |                     |                     |                     |                     |00                   |                     |                     |                     |                     |
-    > ```
-    - **Result:** The new buyer record flows through as a result row with all other columns null, because a FULL OUTER JOIN preserves unmatched records from each joined stream.
 
-- 3rd stream
-    > ```sql
-    > INSERT INTO `product_group` (`id`, `name`, `create_date`) VALUES ('5', 'Clothing5', '2024-05-12 11:30:00');
+- **Result:** Since the event happened in Stream C `(product_group)`, it appears in the results for Stream C even though there’s no matching data from Stream A `(order)` or Stream B `(buyer)`.
     > ```
+    > +----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+
+    > |O_SUPPLIER_ID   |ORDER_ID        |PRODUCT         |O_CREATE_DATE   |O_BUYER_ID      |B_BUYER_ID      |BUYER_NAME      |B_CREATE_DATE   |O_PRODUCT_GROUP_|P_PRODUCT_GROUP_|PRODUCT_GROUP_NA|P_CREATE_DATE   |S_SUPPLIER_ID   |SUPPLIER_NAME   |S_CREATE_DATE   |
+    > |                |                |                |                |                |                |                |                |ID              |ID              |ME              |                |                |                |                |
+    > +----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+
+    > |4               |null            |null            |null            |null            |null            |null            |null            |null            |5               |Clothing5       |2024-05-13T09:30|4               |TopSupplies4    |2024-05-13T09:30|
+    > |                |                |                |                |                |                |                |                |                |                |                |:00.000         |                |                |:00.000         |
     > ```
-    > +---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+
-    > |JOIN_ROWKEY          |ORDER_ID             |PRODUCT              |O_CREATE_DATE        |O_BUYER_ID           |B_BUYER_ID           |BUYER_NAME           |B_CREATE_DATE        |O_PRODUCT_GROUP_ID   |P_PRODUCT_GROUP_ID   |PRODUCT_GROUP_NAME   |P_CREATE_DATE        |
-    > +---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+
-    > |5                    |null                 |null                 |null                 |null                 |null                 |null                 |null                 |null                 |5                    |Clothing5            |2024-05-12T11:30:00.0|
-    > |                     |                     |                     |                     |                     |                     |                     |                     |                     |                     |                     |00                   |
-    > ```
-    - **Result:** The new product_group is output as a row with only its columns filled and the rest as null, since FULL OUTER JOIN ensures every new record in any participating stream appears in the output.
 
-- 1st stream
-    > ```sql
-    > INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('10', 'Gizmo', '2', '4', '6', '2024-05-12 09:30:00');
-    > ```
-    > ```
-    > +---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+
-    > |JOIN_ROWKEY          |ORDER_ID             |PRODUCT              |O_CREATE_DATE        |O_BUYER_ID           |B_BUYER_ID           |BUYER_NAME           |B_CREATE_DATE        |O_PRODUCT_GROUP_ID   |P_PRODUCT_GROUP_ID   |PRODUCT_GROUP_NAME   |P_CREATE_DATE        |
-    > +---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+
-    > |6                    |10                   |Gizmo                |2024-05-12T09:30:00.0|4                    |null                 |null                 |null                 |6                    |null                 |null                 |null                 |
-    > |                     |                     |                     |00                   |                     |                     |                     |                     |                     |                     |                     |                     |
-    > ```
-    - **Result:** The new order row appears with its columns and all unmatched columns from buyer and product_group as null, as FULL OUTER JOIN outputs every row from every stream, joined if possible, and null if not.
-
-### Match 1 Stream
-- Match 2nd stream
-    > ```sql
-    > INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('11', 'Gizmo', '2', '4', '6', '2024-05-12 10:30:00');
-    > ```
-    > ```
-    > +---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+
-    > |JOIN_ROWKEY          |ORDER_ID             |PRODUCT              |O_CREATE_DATE        |O_BUYER_ID           |B_BUYER_ID           |BUYER_NAME           |B_CREATE_DATE        |O_PRODUCT_GROUP_ID   |P_PRODUCT_GROUP_ID   |PRODUCT_GROUP_NAME   |P_CREATE_DATE        |
-    > +---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+
-    > |6                    |11                   |Gizmo                |2024-05-12T10:30:00.0|4                    |4                    |Charlie4             |2024-05-12T10:30:00.0|6                    |null                 |null                 |null                 |
-    > |                     |                     |                     |00                   |                     |                     |                     |00                   |                     |                     |                     |                     |
-    > ```
-    - **Result:** The new order record joins with a matching buyer (left side of the first FULL OUTER JOIN) and outputs a row, but since there’s no matching product_group, those fields are null because FULL OUTER JOIN preserves partial matches from any stream.
-
-- Match 3rd stream
-    > ```sql
-    > INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('12', 'Gizmo', '2', '4', '5', '2024-05-12 11:30:00');
-    > ```
-    > ```
-    > +---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+
-    > |JOIN_ROWKEY          |ORDER_ID             |PRODUCT              |O_CREATE_DATE        |O_BUYER_ID           |B_BUYER_ID           |BUYER_NAME           |B_CREATE_DATE        |O_PRODUCT_GROUP_ID   |P_PRODUCT_GROUP_ID   |PRODUCT_GROUP_NAME   |P_CREATE_DATE        |
-    > +---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+
-    > |5                    |12                   |Gizmo                |2024-05-12T11:30:00.0|4                    |null                 |null                 |null                 |5                    |5                    |Clothing5            |2024-05-12T11:30:00.0|
-    > |                     |                     |                     |00                   |                     |                     |                     |                     |                     |                     |                     |00                   |
-    > ```
-    - **Result:** The order record finds a match in product_group (right side of the second FULL OUTER JOIN) and outputs a partially filled row, while unmatched buyer columns remain null, again because FULL OUTER JOIN outputs all possible combinations with nulls for non-matching sides.
-
-### Match ALL stream
-> ```sql
-> INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('5', 'Charlie5', '2024-05-12 12:30:00');
-> INSERT INTO `product_group` (`id`, `name`, `create_date`) VALUES ('6', 'Clothing6', '2024-05-12 12:30:00');
-> INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('13', 'Gizmo', '2', '5', '6', '2024-05-12 12:30:00');
-> ```
-> ```
-> +---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+
-> |JOIN_ROWKEY          |ORDER_ID             |PRODUCT              |O_CREATE_DATE        |O_BUYER_ID           |B_BUYER_ID           |BUYER_NAME           |B_CREATE_DATE        |O_PRODUCT_GROUP_ID   |P_PRODUCT_GROUP_ID   |PRODUCT_GROUP_NAME   |P_CREATE_DATE        |
-> +---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+---------------------+
-> |6                    |13                   |Gizmo                |2024-05-12T12:30:00.0|5                    |5                    |Charlie5             |2024-05-12T12:30:00.0|6                    |6                    |Clothing6            |2024-05-12T12:30:00.0|
-> |                     |                     |                     |00                   |                     |                     |                     |00                   |                     |                     |                     |00                   |
-> ```
-
-# INNER JOIN
-### Setup
-- Ensure delete dummy data to avoid conflict.
+# Example: Event from Stream B
+- Ensure **remove dummy data** to avoid conflict.
     > ```sql
     > DELETE FROM `order` WHERE id > 9;
     > DELETE FROM `buyer` WHERE id > 3;
     > DELETE FROM `product_group` WHERE id > 4;
+    > DELETE FROM `supplier` WHERE id > 3;
     > ```
 
-- Ensure recreate streams below to avoid conflict.
+- Ensure **recreate streams** to avoid conflict.
     > ```sql
     > DROP STREAM streamtostream_stream_join;
+    > DROP STREAM streamtostream_stream_supplier_intake;
     > DROP STREAM streamtostream_stream_product_group_intake;
     > DROP STREAM streamtostream_stream_buyer_intake;
     > DROP STREAM streamtostream_stream_order_intake;
     > ```
 
-- Check result.
+- Create **JOIN stream** below.
     > ```sql
-    > SELECT * FROM streamtostream_stream_join EMIT CHANGES;
+    > CREATE STREAM streamtostream_stream_join WITH 
+    > (KAFKA_TOPIC='streamtostream_stream_join', VALUE_FORMAT='AVRO') AS
+    > SELECT 
+    >     -- ROWKEY AS join_rowkey, -- only for OUTER JOIN
+    >     o.id AS order_id,
+    >     o.product AS product,
+    >     o.create_date AS o_create_date,
+    >     
+    >     -- buyer
+    >     o.buyer_id AS o_buyer_id,
+    >     b.id AS b_buyer_id,
+    >     b.name AS buyer_name,
+    >     b.create_date AS b_create_date,
+    >     
+    >     -- product group
+    >     o.product_group_id AS o_product_group_id,
+    >     p.id AS p_product_group_id,
+    >     p.name AS product_group_name,
+    >     p.create_date AS p_create_date,
+    > 
+    >     -- supplier
+    >     p.supplier_id AS o_supplier_id,
+    >     s.id AS s_supplier_id,
+    >     s.name AS supplier_name,
+    >     s.create_date AS s_create_date
+    > 
+    > FROM streamtostream_stream_order_intake o
+    > LEFT JOIN streamtostream_stream_buyer_intake b
+    >     WITHIN (5 MINUTES, 10 MINUTES)
+    >     ON o.buyer_id = b.id
+    > RIGHT JOIN streamtostream_stream_product_group_intake p
+    >     WITHIN (15 MINUTES, 30 MINUTES)
+    >     ON o.product_group_id = p.id
+    > LEFT JOIN streamtostream_stream_supplier_intake s
+    >     WITHIN (20 MINUTES, 40 MINUTES)
+    >     ON p.supplier_id = s.id
+    > EMIT CHANGES;
     > ```
 
-### No matching
-> ```sql
-> INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('4', 'Charlie4', '2024-05-12 10:30:00');
-> INSERT INTO `product_group` (`id`, `name`, `create_date`) VALUES ('5', 'Clothing5', '2024-05-12 11:30:00');
-> INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('10', 'Gizmo', '2', '4', '5', '2024-05-12 09:30:00');
-> ```
-- **Result:** No output. Records only appear if they match in every joined stream.
+- Pull request to JOIN stream to **check result**.
+    ```sql
+    SELECT * FROM streamtostream_stream_join EMIT CHANGES;
+    ```
 
-- **Match 1 Stream**
-> ```sql
-> INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('11', 'Gizmo', '2', '4', '5', '2024-05-12 10:30:00');
-> INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('12', 'Gizmo', '2', '4', '5', '2024-05-12 11:30:00');
-> ```
-- **Result:** No record flow through. Every row must have matching keys in all streams to appear in the INNER JOIN result.
-
-- **Match ALL stream**
-> ```sql
-> INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('5', 'Charlie5', '2024-05-12 12:30:00');
-> INSERT INTO `product_group` (`id`, `name`, `create_date`) VALUES ('6', 'Clothing6', '2024-05-12 12:30:00');
-> INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('13', 'Gizmo', '2', '5', '6', '2024-05-12 12:30:00');
-> ```
-> ```
-> +-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+
-> |O_PRODUCT_GROUP_ID     |ORDER_ID               |PRODUCT                |O_CREATE_DATE          |O_BUYER_ID             |B_BUYER_ID             |BUYER_NAME             |B_CREATE_DATE          |P_PRODUCT_GROUP_ID     |PRODUCT_GROUP_NAME     |P_CREATE_DATE          |
-> +-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+
-> |6                      |13                     |Gizmo                  |2024-05-12T12:30:00.000|5                      |5                      |Charlie5               |2024-05-12T12:30:00.000|6                      |Clothing6              |2024-05-12T12:30:00.000|
-> ```
-
-# LEFT JOIN
-### Setup
-- Ensure delete dummy data to avoid conflict.
+- Insert **dummy data**.
     > ```sql
-    > DELETE FROM `order` WHERE id > 9;
-    > DELETE FROM `buyer` WHERE id > 3;
-    > DELETE FROM `product_group` WHERE id > 4;
+    > INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('10', 'Gizmo', '2', '999', '5', '2024-05-12 09:30:00');
+    > INSERT INTO `product_group` (`id`, `name`, `supplier_id`, `create_date`) VALUES ('5', 'Clothing5', '4', '2024-05-12 09:30:00');
+    > INSERT INTO `supplier` (`id`, `name`, `create_date`) VALUES ('4', 'TopSupplies4', '2024-05-12 09:30:00');
+    > INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('4', 'Charlie4', '2024-05-12 09:30:00');
     > ```
 
-- Ensure recreate streams below to avoid conflict.
-    > ```sql
-    > DROP STREAM streamtostream_stream_join;
-    > DROP STREAM streamtostream_stream_product_group_intake;
-    > DROP STREAM streamtostream_stream_buyer_intake;
-    > DROP STREAM streamtostream_stream_order_intake;
+- **Result:** If an event happens in Stream B (`buyer`), there’s no output because it doesn't find a match with Stream A (`order`). So, it won’t continue to Stream C (`product_group`) or Stream D (`supplier`), even if there are matches in those streams for Stream A.
     > ```
-
-- Check result.
-    > ```sql
-    > SELECT * FROM streamtostream_stream_join EMIT CHANGES;
+    > +----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+
+    > |O_SUPPLIER_ID   |ORDER_ID        |PRODUCT         |O_CREATE_DATE   |O_BUYER_ID      |B_BUYER_ID      |BUYER_NAME      |B_CREATE_DATE   |O_PRODUCT_GROUP_|P_PRODUCT_GROUP_|PRODUCT_GROUP_NA|P_CREATE_DATE   |S_SUPPLIER_ID   |SUPPLIER_NAME   |S_CREATE_DATE   |
+    > |                |                |                |                |                |                |                |                |ID              |ID              |ME              |                |                |                |                |
+    > +----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+
+    > |4               |null            |null            |null            |null            |null            |null            |null            |null            |5               |Clothing5       |2024-05-12T09:30|null            |null            |null            |
+    > |                |                |                |                |                |                |                |                |                |                |                |:00.000         |                |                |                |
+    > |4               |null            |null            |null            |null            |null            |null            |null            |null            |5               |Clothing5       |2024-05-12T09:30|4               |TopSupplies4    |2024-05-12T09:30|
+    > |                |                |                |                |                |                |                |                |                |                |                |:00.000         |                |                |:00.000         |
     > ```
-
-### No matching
-- 2nd stream
-    > ```sql
-    > INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('4', 'Charlie4', '2024-05-12 10:30:00');
-    > ```
-    - **Result:** No result, because a LEFT JOIN only outputs rows when the leftmost source stream (order) receives new data, not when a joined stream does.
-
-- 3rd stream
-    > ```sql
-    > INSERT INTO `product_group` (`id`, `name`, `create_date`) VALUES ('5', 'Clothing5', '2024-05-12 11:30:00');
-    > ```
-    - **Result:** No result, because the join sequence starts from order, so new records in product_group alone do not trigger output; only joins caused by new order rows are emitted.
-
-- 1st stream
-    > ```sql
-    > INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('10', 'Gizmo', '2', '4', '6', '2024-05-12 09:30:00');
-    > ```
-    > ```
-    > +-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+
-    > |O_PRODUCT_GROUP_ID     |ORDER_ID               |PRODUCT                |O_CREATE_DATE          |O_BUYER_ID             |B_BUYER_ID             |BUYER_NAME             |B_CREATE_DATE          |P_PRODUCT_GROUP_ID     |PRODUCT_GROUP_NAME     |P_CREATE_DATE          |
-    > +-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+
-    > |6                      |10                     |Gizmo                  |2024-05-12T09:30:00.000|4                      |null                   |null                   |null                   |null                   |null                   |null                   |
-    > ```
-
-### Match 1 Stream
-> ```sql
-> INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('11', 'Gizmo', '2', '4', '5', '2024-05-12 10:30:00');
-> INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('12', 'Gizmo', '2', '4', '5', '2024-05-12 11:30:00');
-> ```
-> ```
-> +-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+
-> |O_PRODUCT_GROUP_ID     |ORDER_ID               |PRODUCT                |O_CREATE_DATE          |O_BUYER_ID             |B_BUYER_ID             |BUYER_NAME             |B_CREATE_DATE          |P_PRODUCT_GROUP_ID     |PRODUCT_GROUP_NAME     |P_CREATE_DATE          |
-> +-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+
-> |5                      |11                     |Gizmo                  |2024-05-12T10:30:00.000|4                      |4                      |Charlie4               |2024-05-12T10:30:00.000|null                   |null                   |null                   |
-> |5                      |12                     |Gizmo                  |2024-05-12T11:30:00.000|4                      |null                   |null                   |null                   |5                      |Clothing5              |2024-05-12T11:30:00.000|
-> ```
-
-- **Result**
-    - First row (matches buyer only):
-        - After inserting a new order, the join immediately attempts to find a matching buyer (based on buyer_id), fills in those columns if found, then continues to join with product_group—if no match there, those fields are null.
-    - Second row (matches product group only):
-        - When another order is inserted, the join process checks for matching buyer first (none found, fields are null), then checks product_group (match found, those fields are filled), so only the product group columns are populated.
-
-### Match ALL stream
-> ```sql
-> INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('5', 'Charlie5', '2024-05-12 12:30:00');
-> INSERT INTO `product_group` (`id`, `name`, `create_date`) VALUES ('6', 'Clothing6', '2024-05-12 12:30:00');
-> INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('13', 'Gizmo', '2', '5', '6', '2024-05-12 12:30:00');
-> ```
-> ```
-> +-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+
-> |O_PRODUCT_GROUP_ID     |ORDER_ID               |PRODUCT                |O_CREATE_DATE          |O_BUYER_ID             |B_BUYER_ID             |BUYER_NAME             |B_CREATE_DATE          |P_PRODUCT_GROUP_ID     |PRODUCT_GROUP_NAME     |P_CREATE_DATE          |
-> +-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+
-> |6                      |13                     |Gizmo                  |2024-05-12T12:30:00.000|5                      |5                      |Charlie5               |2024-05-12T12:30:00.000|6                      |Clothing6              |2024-05-12T12:30:00.000|
-> ```
-
-# RIGHT JOIN
-### Setup
-- Ensure delete dummy data to avoid conflict.
-    > ```sql
-    > DELETE FROM `order` WHERE id > 9;
-    > DELETE FROM `buyer` WHERE id > 3;
-    > DELETE FROM `product_group` WHERE id > 4;
-    > ```
-
-- Ensure recreate streams below to avoid conflict.
-    > ```sql
-    > DROP STREAM streamtostream_stream_join;
-    > DROP STREAM streamtostream_stream_product_group_intake;
-    > DROP STREAM streamtostream_stream_buyer_intake;
-    > DROP STREAM streamtostream_stream_order_intake;
-    > ```
-
-- Check result.
-    > ```sql
-    > SELECT * FROM streamtostream_stream_join EMIT CHANGES;
-    > ```
-
-### No matching
-- 2nd stream
-    > ```sql
-    > INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('4', 'Charlie4', '2024-05-12 10:30:00');
-    > ```
-    **Result:** No result appears because, with consecutive RIGHT JOINs, a new buyer record will only show up if there is also a matching row in the rightmost product_group stream.
-
-- 3rd stream
-    > ```sql
-    > INSERT INTO `product_group` (`id`, `name`, `create_date`) VALUES ('5', 'Clothing5', '2024-05-12 11:30:00');
-    > ```
-    > ```
-    > +-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+
-    > |O_PRODUCT_GROUP_ID     |ORDER_ID               |PRODUCT                |O_CREATE_DATE          |O_BUYER_ID             |B_BUYER_ID             |BUYER_NAME             |B_CREATE_DATE          |P_PRODUCT_GROUP_ID     |PRODUCT_GROUP_NAME     |P_CREATE_DATE          |
-    > +-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+
-    > |5                      |null                   |null                   |null                   |null                   |null                   |null                   |null                   |5                      |Clothing5              |2024-05-12T11:30:00.000|
-    > ```
-    - **Result:** A result row is created with product_group fields filled and all other columns null, since the final RIGHT JOIN always outputs every new product_group row regardless of upstream matches.
-
-- 1st stream
-    > ```sql
-    > INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('10', 'Gizmo', '2', '4', '6', '2024-05-12 09:30:00');
-    > ```
-    **Result:** No result appears because a new order alone cannot propagate through unless there is also a corresponding product_group for the final RIGHT JOIN to include.
-
-### Match 1 Stream
-> ```sql
-> INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('11', 'Gizmo', '2', '4', '5', '2024-05-12 10:30:00');
-> INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('12', 'Gizmo', '2', '4', '5', '2024-05-12 11:30:00');
-> ```
-- **Result:**
-    - First insertion (order matches buyer only):
-        - No result, because although the order matches a buyer in the first RIGHT JOIN, the combined row does not have a product_group match for the final RIGHT JOIN, so it is not included in the output.
-    - Second insertion (order matches product_group only):
-        - No result, because the order fails to match any buyer in the first RIGHT JOIN, so the row is dropped immediately and never considered by the next join.
-
-# Match ALL stream
-> ```sql
-> INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('5', 'Charlie5', '2024-05-12 12:30:00');
-> INSERT INTO `product_group` (`id`, `name`, `create_date`) VALUES ('6', 'Clothing6', '2024-05-12 12:30:00');
-> INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('13', 'Gizmo', '2', '5', '6', '2024-05-12 12:30:00');
-> ```
-> ```
-> +-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+
-> |O_PRODUCT_GROUP_ID     |ORDER_ID               |PRODUCT                |O_CREATE_DATE          |O_BUYER_ID             |B_BUYER_ID             |BUYER_NAME             |B_CREATE_DATE          |P_PRODUCT_GROUP_ID     |PRODUCT_GROUP_NAME     |P_CREATE_DATE          |
-> +-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+-----------------------+
-> |6                      |null                   |null                   |null                   |null                   |null                   |null                   |null                   |6                      |Clothing6              |2024-05-12T12:30:00.000|
-> |6                      |13                     |Gizmo                  |2024-05-12T12:30:00.000|5                      |5                      |Charlie5               |2024-05-12T12:30:00.000|6                      |Clothing6              |2024-05-12T12:30:00.000|
-> ```

@@ -1,7 +1,7 @@
 CREATE STREAM streamtostream_stream_join WITH 
 (KAFKA_TOPIC='streamtostream_stream_join', VALUE_FORMAT='AVRO') AS
-SELECT
-    ROWKEY AS join_rowkey,
+SELECT 
+    -- ROWKEY AS join_rowkey, -- only for OUTER JOIN
     o.id AS order_id,
     o.product AS product,
     o.create_date AS o_create_date,
@@ -18,9 +18,9 @@ SELECT
     p.name AS product_group_name,
     p.create_date AS p_create_date
 FROM streamtostream_stream_order_intake o
-FULL OUTER JOIN streamtostream_stream_buyer_intake b
+RIGHT JOIN streamtostream_stream_buyer_intake b -- EDIT HERE
     WITHIN (5 MINUTES, 10 MINUTES)
     ON o.buyer_id = b.id
-FULL OUTER JOIN streamtostream_stream_product_group_intake p
+RIGHT JOIN streamtostream_stream_product_group_intake p -- EDIT HERE
     WITHIN (15 MINUTES, 30 MINUTES)
     ON o.product_group_id = p.id;

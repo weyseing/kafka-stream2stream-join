@@ -216,7 +216,7 @@
     > |6                      |10                     |Gizmo                  |2024-05-12T09:30:00.000|4                      |null                   |null                   |null                   |null                   |null                   |null                   |
     > ```
 
-### Match 1 Stream**
+### Match 1 Stream
 > ```sql
 > INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('11', 'Gizmo', '2', '4', '5', '2024-05-12 10:30:00');
 > INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('12', 'Gizmo', '2', '4', '5', '2024-05-12 11:30:00');

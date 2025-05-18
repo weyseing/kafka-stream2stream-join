@@ -51,7 +51,7 @@
     > |null                 |null                 |null                 |null                 |null                 |4                    |Charlie4             |2024-05-12T10:30:00.0|null                 |null                 |null                 |null                 |
     > |                     |                     |                     |                     |                     |                     |                     |00                   |                     |                     |                     |                     |
     > ```
-- **Result:** The new buyer record flows through as a result row with all other columns null, because a FULL OUTER JOIN preserves unmatched records from each joined stream.
+    - **Result:** The new buyer record flows through as a result row with all other columns null, because a FULL OUTER JOIN preserves unmatched records from each joined stream.
 
 - 3rd stream
     > ```sql
@@ -64,7 +64,7 @@
     > |5                    |null                 |null                 |null                 |null                 |null                 |null                 |null                 |null                 |5                    |Clothing5            |2024-05-12T11:30:00.0|
     > |                     |                     |                     |                     |                     |                     |                     |                     |                     |                     |                     |00                   |
     > ```
-- **Result:** The new product_group is output as a row with only its columns filled and the rest as null, since FULL OUTER JOIN ensures every new record in any participating stream appears in the output.
+    - **Result:** The new product_group is output as a row with only its columns filled and the rest as null, since FULL OUTER JOIN ensures every new record in any participating stream appears in the output.
 
 - 1st stream
     > ```sql
@@ -77,7 +77,7 @@
     > |6                    |10                   |Gizmo                |2024-05-12T09:30:00.0|4                    |null                 |null                 |null                 |6                    |null                 |null                 |null                 |
     > |                     |                     |                     |00                   |                     |                     |                     |                     |                     |                     |                     |                     |
     > ```
-- **Result:** The new order row appears with its columns and all unmatched columns from buyer and product_group as null, as FULL OUTER JOIN outputs every row from every stream, joined if possible, and null if not.
+    - **Result:** The new order row appears with its columns and all unmatched columns from buyer and product_group as null, as FULL OUTER JOIN outputs every row from every stream, joined if possible, and null if not.
 
 ### Match 1 Stream
 If you insert data that matches in only one of the other streams, you’ll get a partially joined result—some fields have data, others are still null.
@@ -93,7 +93,7 @@ If you insert data that matches in only one of the other streams, you’ll get a
     > |6                    |11                   |Gizmo                |2024-05-12T10:30:00.0|4                    |4                    |Charlie4             |2024-05-12T10:30:00.0|6                    |null                 |null                 |null                 |
     > |                     |                     |                     |00                   |                     |                     |                     |00                   |                     |                     |                     |                     |
     > ```
-- **Result:** The new order record joins with a matching buyer (left side of the first FULL OUTER JOIN) and outputs a row, but since there’s no matching product_group, those fields are null because FULL OUTER JOIN preserves partial matches from any stream.
+    - **Result:** The new order record joins with a matching buyer (left side of the first FULL OUTER JOIN) and outputs a row, but since there’s no matching product_group, those fields are null because FULL OUTER JOIN preserves partial matches from any stream.
 
 - Match 3rd stream
     > ```sql
@@ -106,7 +106,7 @@ If you insert data that matches in only one of the other streams, you’ll get a
     > |5                    |12                   |Gizmo                |2024-05-12T11:30:00.0|4                    |null                 |null                 |null                 |5                    |5                    |Clothing5            |2024-05-12T11:30:00.0|
     > |                     |                     |                     |00                   |                     |                     |                     |                     |                     |                     |                     |00                   |
     > ```
-- **Result:** The order record finds a match in product_group (right side of the second FULL OUTER JOIN) and outputs a partially filled row, while unmatched buyer columns remain null, again because FULL OUTER JOIN outputs all possible combinations with nulls for non-matching sides.
+    - **Result:** The order record finds a match in product_group (right side of the second FULL OUTER JOIN) and outputs a partially filled row, while unmatched buyer columns remain null, again because FULL OUTER JOIN outputs all possible combinations with nulls for non-matching sides.
 
 ### Match ALL stream
 If you insert matching data into all related tables, you get a fully joined result where all columns have values:

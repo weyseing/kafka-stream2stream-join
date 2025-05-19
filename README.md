@@ -181,14 +181,7 @@
     > |                |                |                |                |                |                |                |                |                |                |                |:00.000         |                |                |:00.000         |
     > ```
 
-# Join Window
-- This document provides `INSERT` statements for demonstrating the backward part of ksqlDB stream-stream join windows. We will show scenarios where events from one stream arrive _before_ the event from the "primary" stream, and how they either join (if within the `WITHIN` window) or do not join (if outside the `WITHIN` window).
-- **Base Timestamp:** `2024-05-19 12:00:00 PM`
-- **Join Windows:**
-    * **Order (A) to Buyer (B):** `WITHIN (5 MINUTES, 10 MINUTES)`
-        * When an Order event arrives (A), it will look for Buyer events (B) between 5 minutes _before_ A's timestamp and 10 minutes _after_ A's timestamp.
-    * **Order (A) to Product Group (C):** `WITHIN (15 MINUTES, 30 MINUTES)`
-        * When an Order event arrives (A), it will look for Product Group events (C) between 15 minutes _before_ A's timestamp and 30 minutes _after_ A's timestamp.
+# 2+1 Joined Stream
 
 ---
 ### Setup
@@ -202,7 +195,7 @@
 
 - Ensure **recreate streams** to avoid conflict.
     > ```sql
-    > DROP STREAM streamtostream_stream_join;
+    > DROP STREAM streamtostream_join_order_buyer;
     > DROP STREAM streamtostream_stream_supplier_intake;
     > DROP STREAM streamtostream_stream_product_group_intake;
     > DROP STREAM streamtostream_stream_buyer_intake;
@@ -210,39 +203,72 @@
     > ```
 
 - Create **JOIN stream** below.
-    > ```sql
-    > CREATE STREAM streamtostream_stream_join WITH 
-    > (KAFKA_TOPIC='streamtostream_stream_join', VALUE_FORMAT='AVRO') AS
-    > SELECT 
-    >     ROWKEY AS join_rowkey,
-    >     o.id AS order_id,
-    >     o.product AS product,
-    >     o.create_date AS o_create_date,
-    > 
-    >     -- buyer
-    >     o.buyer_id AS o_buyer_id,
-    >     b.id AS b_buyer_id,
-    >     b.name AS buyer_name,
-    >     b.create_date AS b_create_date,
-    > 
-    >     -- product group
-    >     o.product_group_id AS o_product_group_id,
-    >     p.id AS p_product_group_id,
-    >     p.name AS product_group_name,
-    >     p.create_date AS p_create_date
-    > 
-    > FROM streamtostream_stream_order_intake o
-    > FULL OUTER JOIN streamtostream_stream_buyer_intake b
-    >     WITHIN (5 MINUTES, 10 MINUTES)
-    >     ON o.buyer_id = b.id
-    > FULL OUTER JOIN streamtostream_stream_product_group_intake p
-    >     WITHIN (15 MINUTES, 30 MINUTES)
-    >     ON o.product_group_id = p.id
-    > EMIT CHANGES;
-    > ```
+```sql
+CREATE STREAM streamtostream_join_order_buyer AS
+SELECT
+    ROWKEY AS join_key,
+    o.id AS order_id,
+    o.product,
+    o.product_group_id,
+    o.create_date AS o_create_date,
+    o.buyer_id AS o_buyer_id,
+    b.id AS b_buyer_id,
+    b.name AS buyer_name,
+    b.create_date AS b_create_date
+FROM streamtostream_stream_order_intake o
+FULL OUTER JOIN streamtostream_stream_buyer_intake b
+    WITHIN (5 MINUTES, 10 MINUTES)
+    ON o.buyer_id = b.id
+EMIT CHANGES;
+```
 
 - Pull request to JOIN stream to **check result**.
     ```sql
-    SELECT * FROM streamtostream_stream_join EMIT CHANGES;
+    SELECT FROM_UNIXTIME(ROWTIME) as row_time, * FROM streamtostream_join_order_buyer EMIT CHANGES;
     ```
+
 ---
+### Event Arrives in Stream Order
+```sql
+-- Buyer exists BEFORE order
+INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES
+  (4, 'Alice', '2024-05-20 09:56:00'); -- 4 min before order
+
+-- Order event
+INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES
+  (10, 'Widget', 1, 4, 5, '2024-05-20 10:00:00');
+```
+
+- **Result**
+```
++------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+
+|ROW_TIME          |JOIN_KEY          |ORDER_ID          |PRODUCT           |PRODUCT_GROUP_ID  |O_CREATE_DATE     |O_BUYER_ID        |B_BUYER_ID        |BUYER_NAME        |B_CREATE_DATE     |
++------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+
+|2024-05-20T09:56:0|4                 |null              |null              |null              |null              |null              |4                 |Alice             |2024-05-20T09:56:0|
+|0.000             |                  |                  |                  |                  |                  |                  |                  |                  |0.000             |
+|2024-05-20T10:00:0|4                 |10                |Widget            |5                 |2024-05-20T10:00:0|4                 |4                 |Alice             |2024-05-20T09:56:0|
+|0.000             |                  |                  |                  |                  |0.000             |                  |                  |                  |0.000             |
+```
+
+---
+### Event Arrives in Stream Buyer
+```sql
+-- Order exists BEFORE buyer
+INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES
+  (11, 'Thingy', 1, 5, 5, '2024-05-20 10:20:00');
+
+-- Buyer event inserted later
+INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES
+  (5, 'Bob', '2024-05-20 10:25:00'); -- 5 min after order
+```
+
+- **Result**
+```
++------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+
+|ROW_TIME          |JOIN_KEY          |ORDER_ID          |PRODUCT           |PRODUCT_GROUP_ID  |O_CREATE_DATE     |O_BUYER_ID        |B_BUYER_ID        |BUYER_NAME        |B_CREATE_DATE     |
++------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+
+|2024-05-20T10:20:0|5                 |11                |Thingy            |5                 |2024-05-20T10:20:0|5                 |null              |null              |null              |
+|0.000             |                  |                  |                  |                  |0.000             |                  |                  |                  |                  |
+|2024-05-20T10:25:0|5                 |11                |Thingy            |5                 |2024-05-20T10:20:0|5                 |5                 |Bob               |2024-05-20T10:25:0|
+|0.000             |                  |                  |                  |                  |0.000             |                  |                  |                  |0.000             |
+```

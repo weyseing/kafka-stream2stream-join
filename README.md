@@ -205,7 +205,8 @@ This section details a ksqlDB multi-stage join where an initial stream `(Orders 
 
 - Create **1st JOIN stream** below.
     > ```sql
-    > CREATE STREAM streamtostream_stream_join_order_buyer AS
+    > CREATE STREAM streamtostream_stream_join_order_buyer 
+    > (KAFKA_TOPIC='streamtostream_stream_join_order_buyer', VALUE_FORMAT='AVRO') AS
     > SELECT
     >     ROWKEY AS join_key,
     > 
@@ -227,7 +228,8 @@ This section details a ksqlDB multi-stage join where an initial stream `(Orders 
 
 - Create **2nd JOIN stream** below.
     > ```sql
-    > CREATE STREAM streamtostream_stream_join_order_buyer_pg AS
+    > CREATE STREAM streamtostream_stream_join_order_buyer_pg 
+    > (KAFKA_TOPIC='streamtostream_stream_join_order_buyer_pg', VALUE_FORMAT='AVRO') AS
     > SELECT
     >     ROWKEY AS join_key,
     > 
@@ -383,3 +385,55 @@ This happens because the `A_ROW_TIME` (`10:20:00`) of the potential matching rec
     > |2024-05-20T10:56|7               |null            |2024-05-20T10:56|null            |null            |null            |null            |null            |null            |null            |null            |7               |Toys            |2024-05-20T10:56|
     > |:00.000         |                |                |:00.000         |                |                |                |                |                |                |                |                |                |                |:00.000         |
     > ```
+
+# Grace Period
+### Setup
+- Ensure **remove dummy data** to avoid conflict.
+    > ```sql
+    > DELETE FROM `order` WHERE id > 9;
+    > DELETE FROM `buyer` WHERE id > 3;
+    > DELETE FROM `product_group` WHERE id > 4;
+    > DELETE FROM `supplier` WHERE id > 3;
+    > ```
+
+- Ensure **recreate streams** to avoid conflict.
+    > ```sql
+    > DROP STREAM streamtostream_stream_join_order_buyer_pg;
+    > DROP STREAM streamtostream_stream_join_order_buyer;
+    > DROP STREAM streamtostream_stream_supplier_intake;
+    > DROP STREAM streamtostream_stream_product_group_intake;
+    > DROP STREAM streamtostream_stream_buyer_intake;
+    > DROP STREAM streamtostream_stream_order_intake;
+    > ```
+
+- Create **JOIN stream** below.
+    > ```sql
+    > CREATE STREAM streamtostream_stream_join_order_buyer
+    > WITH (KAFKA_TOPIC='streamtostream_stream_join_order_buyer') AS
+    > SELECT
+    >     ROWKEY as join_key,
+    >     o.ROWTIME AS o_rowtime,
+    >     b.ROWTIME AS b_rowtime,
+    > 
+    >     o.id AS order_id,
+    >     o.product,
+    >     o.create_date AS o_create_date,
+    >     o.buyer_id AS o_buyer_id,
+    > 
+    >     b.id AS b_buyer_id,
+    >     b.name AS buyer_name,
+    >     b.create_date AS b_create_date
+    > FROM streamtostream_stream_order_intake o
+    > FULL OUTER JOIN streamtostream_stream_buyer_intake b
+    >     WITHIN (5 MINUTES, 10 MINUTES) GRACE PERIOD 2 MINUTES
+    >     ON o.buyer_id = b.id
+    > EMIT CHANGES;
+    > ```
+
+- Pull request to JOIN stream to **check result**.
+    > ```sql
+    > SELECT FROM_UNIXTIME(ROWTIME) as row_time, * FROM streamtostream_stream_join_order_buyer EMIT CHANGES;
+    > ```
+
+
+

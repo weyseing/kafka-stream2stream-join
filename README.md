@@ -274,11 +274,6 @@ INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('5', 'Buyer5', '2024-0
     > INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('10', 'Gizmo', '2', '4', '3', '2024-05-20 10:30:00');
     > ```
 
-- No join result as `buyer` event is 11mins after `order` event.
-    > ```sql
-    > INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('4', 'Charlie4', '2024-05-20 10:41:00');
-    > ```
-
 - **Result:** No join result as `buyer` event.
     - Window of **order** `(10:30)` = `10:25` to `10:40`
     - Window of **buyer** `(10:41)` = `10:31` to `10:46`

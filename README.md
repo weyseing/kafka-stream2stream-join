@@ -95,6 +95,7 @@ In ksqlDB, the order of streams in a multi-stage join (`(((A JOIN B) JOIN C) JOI
     > |           |           |           |           |           |           |           |           |           |           |           |0          |           |           |0          |
     > ```
 
+---
 ### Event from Stream B
 - Insert **dummy data**.
 ```sql

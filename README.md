@@ -30,12 +30,8 @@ To reset for practice, follow these steps.
     > ```
 
 # Multi-Join Flow
-In ksqlDB, the order of streams in a multi-stage join (`(((A JOIN B) JOIN C) JOIN D)`) impacts how events are processed:
-- **Event from C:** The event flow to stream C even there is no join result from `(A JOIN B)`.
-- **Event from B:** The event from stop at stream B if no join result from `(A JOIN B)`.
+In ksqlDB, the order of streams in a multi-stage join (`(((A JOIN B) JOIN C) JOIN D)`).
 
----
-### Event from Stream C
 - Create **JOIN stream** below.
     > ```sql
     > CREATE STREAM streamtostream_stream_join WITH 
@@ -73,11 +69,8 @@ In ksqlDB, the order of streams in a multi-stage join (`(((A JOIN B) JOIN C) JOI
     > EMIT CHANGES;
     > ```
 
-- Pull request to JOIN stream to **check result**.
-    ```sql
-    SELECT * FROM streamtostream_stream_join EMIT CHANGES;
-    ```
-
+---
+### Event from Stream C
 - Insert **dummy data**.
     > ```sql
     > INSERT INTO `supplier` (`id`, `name`, `create_date`) VALUES ('4', 'TopSupplies4', '2024-05-13 09:30:00');

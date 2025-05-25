@@ -103,31 +103,15 @@ INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('5', 'Buyer5', '2024-0
 
 - **Result:** No join result as no join result from `(A JOIN B)`.
 
-# Multi-Stage Stream Joins: 2+1 Stream
-This section details a ksqlDB multi-stage join where an initial stream `(Orders joined with Buyers)` is subsequently joined with a third stream `(Product Group)`, highlighting the impact of event timing and join windows.
 
-### Setup
-- Ensure **remove dummy data** to avoid conflict.
-    > ```sql
-    > DELETE FROM `order` WHERE id > 9;
-    > DELETE FROM `buyer` WHERE id > 3;
-    > DELETE FROM `product_group` WHERE id > 4;
-    > DELETE FROM `supplier` WHERE id > 3;
-    > ```
-
-- Ensure **recreate streams** to avoid conflict.
-    > ```sql
-    > DROP STREAM streamtostream_stream_join_order_buyer_pg;
-    > DROP STREAM streamtostream_stream_join_order_buyer;
-    > DROP STREAM streamtostream_stream_supplier_intake;
-    > DROP STREAM streamtostream_stream_product_group_intake;
-    > DROP STREAM streamtostream_stream_buyer_intake;
-    > DROP STREAM streamtostream_stream_order_intake;
-    > ```
+# Cascading Stream Joins
+- This is to compare 2 methods:
+    - **Cascading Join:** `2+1 Structure`
+    - **3-Streams Join:** `((A JOIN B) JOIN C)` directly
 
 - Create **1st JOIN stream** below.
     > ```sql
-    > CREATE STREAM streamtostream_stream_join_order_buyer 
+    > CREATE STREAM streamtostream_stream_join_order_buyer WITH
     > (KAFKA_TOPIC='streamtostream_stream_join_order_buyer', VALUE_FORMAT='AVRO') AS
     > SELECT
     >     ROWKEY AS join_key,
@@ -150,7 +134,7 @@ This section details a ksqlDB multi-stage join where an initial stream `(Orders 
 
 - Create **2nd JOIN stream** below.
     > ```sql
-    > CREATE STREAM streamtostream_stream_join_order_buyer_pg 
+    > CREATE STREAM streamtostream_stream_join_order_buyer_pg WITH
     > (KAFKA_TOPIC='streamtostream_stream_join_order_buyer_pg', VALUE_FORMAT='AVRO') AS
     > SELECT
     >     ROWKEY AS join_key,
@@ -177,185 +161,72 @@ This section details a ksqlDB multi-stage join where an initial stream `(Orders 
     > EMIT CHANGES;
     > ```
 
-- Pull request to JOIN stream to **check result**.
-    > ```sql
-    > -- 1st joined stream
-    > SELECT FROM_UNIXTIME(ROWTIME) as row_time, * FROM streamtostream_stream_join_order_buyer EMIT CHANGES;
-    >     
-    > -- 2nd joined stream
-    > SELECT FROM_UNIXTIME(ROWTIME) as row_time, * FROM streamtostream_stream_join_order_buyer_pg EMIT CHANGES;
-    > ```
-
 ---
-### Stage 1 Join: `Order` Event Arrives
-> ```sql
-> -- Buyer exists BEFORE order
-> INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES
->   (4, 'Alice', '2024-05-20 09:56:00'); -- 4 min before order
-> 
-> -- Order event
-> INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES
->   (10, 'Widget', 1, 4, 5, '2024-05-20 10:00:00');
-> ```
-
-- **Result:** The `FULL OUTER JOIN` produces two records.
-    1. The first (ROWTIME `09:56:00`) occurs when the `Buyer` event ('Alice', id 4) arrives. At this point, no `Order` with `buyer_id = 4` has arrived within the window `Buyer.rowtime` expects for an `Order` (i.e., `Order.rowtime` between `[Buyer_timestamp - 10min, Buyer_timestamp + 5min]`). Thus, the Buyer event is output with `null` Order details.
-    2. The second (ROWTIME `10:00:00`) occurs when the `Order` event (id 10, `buyer_id = 4`) arrives. It successfully joins with the 'Alice' `Buyer` event because `Buyer.id` matches `Order.buyer_id`, and the `Buyer`'s timestamp (`09:56:00`) is within the `Order`'s required window for a `Buyer` (i.e., `Buyer.rowtime` between `[Order_timestamp - 5min, Order_timestamp + 10min]`, which is `[09:55:00, 10:10:00]`).
+### `Buyer` Event
+- Insert **dummy data**.
     > ```sql
-    > +--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+
-    > |ROW_TIME                  |JOIN_KEY                  |ORDER_ID                  |PRODUCT                   |PRODUCT_GROUP_ID          |O_CREATE_DATE             |O_BUYER_ID                |B_BUYER_ID                |BUYER_NAME                |B_CREATE_DATE             |
-    > +--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+
-    > |2024-05-20T09:56:00.000   |4                         |null                      |null                      |null                      |null                      |null                      |4                         |Alice                     |2024-05-20T09:56:00.000   |
-    > |2024-05-20T10:00:00.000   |4                         |10                        |Widget                    |5                         |2024-05-20T10:00:00.000   |4                         |4                         |Alice                     |2024-05-20T09:56:00.000   |
-    > ```
-
----
-### Stage 1 Join: `Buyer` Event Arrives
-```sql
--- Order exists BEFORE buyer
-INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES
-  (11, 'Thingy', 1, 5, 5, '2024-05-20 10:20:00');
-
--- Buyer event inserted later
-INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES
-  (5, 'Bob', '2024-05-20 10:25:00'); -- 5 min after order
-```
-
-- **Result:** The `FULL OUTER JOIN` produces two records.
-    1. The first (ROWTIME `10:20:00`) occurs when the `Order` event (id 11, `buyer_id = 5`) arrives. At this point, no `Buyer` with `id = 5` has arrived within the window `Order.rowtime` expects for a `Buyer` (i.e., `Buyer.rowtime` between `[Order_timestamp - 5min, Order_timestamp + 10min]`). Thus, the `Order` event is output with `null` Buyer details.
-    2. The second (ROWTIME `10:25:00`) occurs when the `Buyer` event ('Bob', id 5) arrives. It successfully joins with the `Order` event (id 11) because `Order.buyer_id` matches `Buyer.id`, and the `Order`'s timestamp (`10:20:00`) is within the `Buyer`'s required window for an `Order` (i.e., `Order.rowtime` between `[Buyer_timestamp - 10min, Buyer_timestamp + 5min]`, which is `[10:15:00, 10:30:00]`).
-    
-    > ```sql
-    > +--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+
-    > |ROW_TIME                  |JOIN_KEY                  |ORDER_ID                  |PRODUCT                   |PRODUCT_GROUP_ID          |O_CREATE_DATE             |O_BUYER_ID                |B_BUYER_ID                |BUYER_NAME                |B_CREATE_DATE             |
-    > +--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+--------------------------+
-    > |2024-05-20T10:20:00.000   |5                         |11                        |Thingy                    |5                         |2024-05-20T10:20:00.000   |5                         |null                      |null                      |null                      |
-    > |2024-05-20T10:25:00.000   |5                         |11                        |Thingy                    |5                         |2024-05-20T10:20:00.000   |5                         |5                         |Bob                       |2024-05-20T10:25:00.000   |
-    > ```
-
----
-### Stage 2 Join: Border Case `(AFTER at 30-minute Window Edge)`
-```sql
--- Product Group event exactly at window edge (exactly 30 min after 10:25:00)
-INSERT INTO `product_group` (`id`, `name`, `supplier_id`, `create_date`) VALUES
-  (5, 'Electronics', 3, '2024-05-20 10:55:00'); 
-```
-
-- **Result:** The output shows a single, successfully joined record. The `ROWTIME` of this final joined event is `2024-05-20T10:55:00.000`, aligned with the arrival of the triggering `Product Group` event.
-    - `A_ROW_TIME` (`10:25:00`) timestamp of the pre-existing record in `streamtostream_stream_join_order_buyer` (Order 11 'Thingy', Buyer 'Bob').
-    - `P_ROW_TIME` (`10:55:00`) timestamp of the incoming `Product Group` event (id 5, 'Electronics').
-The join is successful because their `product_group_id` (5) matches, and `A_ROW_TIME` (`10:25:00`) is exactly 30 minutes before `P_ROW_TIME` (`10:55:00`). This satisfies the `WITHIN (15 MINUTES, 30 MINUTES)` condition at its `t_a = t_p - 30 MINUTES` boundary (where `t_a` is `A_ROW_TIME` and `t_p` is `P_ROW_TIME`).
-
-    > ```sql
-    > +----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+
-    > |ROW_TIME        |JOIN_KEY        |A_ROW_TIME      |P_ROW_TIME      |ORDER_ID        |PRODUCT         |PRODUCT_GROUP_ID|O_CREATE_DATE   |O_BUYER_ID      |B_BUYER_ID      |BUYER_NAME      |B_CREATE_DATE   |PG_ID           |PG_NAME         |PG_CREATE_DATE  |
-    > +----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+
-    > |2024-05-20T10:55|5               |2024-05-20T10:25|2024-05-20T10:55|11              |Thingy          |5               |2024-05-20T10:20|5               |5               |Bob             |2024-05-20T10:25|5               |Electronics     |2024-05-20T10:55|
-    > |:00.000         |                |:00.000         |:00.000         |                |                |                |:00.000         |                |                |                |:00.000         |                |                |:00.000         |
-    > ```
-
----
-### Stage 2 Join: Border Case `(BEFORE at 15-minute Window Edge)`
-```sql
--- First create a new order-buyer record with different product_group_id 
-INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES
-  (12, 'Tablet', 1, 5, 6, '2024-05-20 10:25:00'); -- Establishes A_ROW_TIME = 10:25:00
-  
--- Product Group event inserted 15 minutes BEFORE A_ROW_TIME
-INSERT INTO `product_group` (`id`, `name`, `supplier_id`, `create_date`) VALUES
-  (6, 'Electronics', 2, '2024-05-20 10:10:00');  -- Tests A_ROW_TIME = P_ROWTIME + 15min boundary
-```
-
-- **Result:** The output shows a single, successfully joined record. The `ROWTIME` of this final joined event is `2024-05-20T10:25:00.000` (MAX of `A_ROW_TIME` (`10:25:00`) and `P_ROW_TIME` (`10:10:00`)).
-    - `A_ROW_TIME` (`10:25:00`) from the first joined stream (Order 12 'Tablet', Buyer 'Bob', `product_group_id = 6`).
-    - `P_ROW_TIME` (`10:10:00`) from the incoming `Product Group` event (id 6, 'Electronics').
-The join is successful because `product_group_id` (6) matches, and `A_ROW_TIME` (`10:25:00`) equals `P_ROWTIME + 15 minutes` (`10:10:00 + 15min = 10:25:00`). This hits the boundary condition where the `Order-Buyer` event is 15 minutes after the `Product Group` event, at the edge of the valid join window `[09:40:00, 10:25:00]`.
-
-    > ```sql
-    > +----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+
-    > |ROW_TIME        |JOIN_KEY        |A_ROW_TIME      |P_ROW_TIME      |ORDER_ID        |PRODUCT         |PRODUCT_GROUP_ID|O_CREATE_DATE   |O_BUYER_ID      |B_BUYER_ID      |BUYER_NAME      |B_CREATE_DATE   |PG_ID           |PG_NAME         |PG_CREATE_DATE  |
-    > +----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+
-    > |2024-05-20T10:25|6               |2024-05-20T10:25|2024-05-20T10:10|12              |Tablet          |6               |2024-05-20T10:25|5               |5               |Bob             |2024-05-20T10:25|6               |Electronics     |2024-05-20T10:10|
-    > |:00.000         |                |:00.000         |:00.000         |                |                |                |:00.000         |                |                |                |:00.000         |                |                |:00.000         |
-    > ```
-
----
-### Stage 2 Join: Excluded Case `(Outside the Window)`
-```sql
--- First create a new order-buyer record with different product_group_id
-INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES
-  (13, 'Gadget', 1, 5, 7, '2024-05-20 10:20:00');
--- after join buyer (ID=5), timestamp = '2024-05-20 10:25:00'
-  
--- Then insert product group outside the window (31+ min after the joined stream time)
-INSERT INTO `product_group` (`id`, `name`, `supplier_id`, `create_date`) VALUES
-  (7, 'Toys', 2, '2024-05-20 10:56:00');  -- 31 min after joined stream - just outside window
-```
-
-- **Result:** The `FULL OUTER JOIN` results in a single output record originating from the `Product Group` stream, as no matching record was found in the `streamtostream_stream_join_order_buyer` stream within the specified time window.
-    - The `ROWTIME` of the output is `2024-05-20T10:56:00.000`, aligned with the `Product Group` event.
-    - All fields from `streamtostream_stream_join_order_buyer` (like `A_ROW_TIME`, `ORDER_ID`, `BUYER_NAME`, etc.) are `null`.
-    - Fields from the `Product Group` stream (`P_ROW_TIME` (`10:56:00`), `PG_ID = 7`) are present.
-This happens because the `A_ROW_TIME` (`10:20:00`) of the potential matching record (Order 13) is outside the required window `[10:26:00, 11:11:00]` relative to the `P_ROW_TIME` (`10:56:00`).
-
-    > ```sql
-    > +----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+
-    > |ROW_TIME        |JOIN_KEY        |A_ROW_TIME      |P_ROW_TIME      |ORDER_ID        |PRODUCT         |PRODUCT_GROUP_ID|O_CREATE_DATE   |O_BUYER_ID      |B_BUYER_ID      |BUYER_NAME      |B_CREATE_DATE   |PG_ID           |PG_NAME         |PG_CREATE_DATE  |
-    > +----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+
-    > |2024-05-20T10:25|7               |2024-05-20T10:25|null            |13              |Gadget          |7               |2024-05-20T10:20|5               |5               |Bob             |2024-05-20T10:25|null            |null            |null            |
-    > |:00.000         |                |:00.000         |                |                |                |                |:00.000         |                |                |                |:00.000         |                |                |                |
-    > |2024-05-20T10:56|7               |null            |2024-05-20T10:56|null            |null            |null            |null            |null            |null            |null            |null            |7               |Toys            |2024-05-20T10:56|
-    > |:00.000         |                |                |:00.000         |                |                |                |                |                |                |                |                |                |                |:00.000         |
-    > ```
-
-# Grace Period
-### Setup
-- Ensure **remove dummy data** to avoid conflict.
-    > ```sql
-    > DELETE FROM `order` WHERE id > 9;
-    > DELETE FROM `buyer` WHERE id > 3;
-    > DELETE FROM `product_group` WHERE id > 4;
-    > DELETE FROM `supplier` WHERE id > 3;
-    > ```
-
-- Ensure **recreate streams** to avoid conflict.
-    > ```sql
-    > DROP STREAM streamtostream_stream_join_order_buyer_pg;
-    > DROP STREAM streamtostream_stream_join_order_buyer;
-    > DROP STREAM streamtostream_stream_supplier_intake;
-    > DROP STREAM streamtostream_stream_product_group_intake;
-    > DROP STREAM streamtostream_stream_buyer_intake;
-    > DROP STREAM streamtostream_stream_order_intake;
-    > ```
-
-- Create **JOIN stream** below.
-    > ```sql
-    > CREATE STREAM streamtostream_stream_join_order_buyer
-    > WITH (KAFKA_TOPIC='streamtostream_stream_join_order_buyer') AS
-    > SELECT
-    >     ROWKEY as join_key,
-    >     o.ROWTIME AS o_rowtime,
-    >     b.ROWTIME AS b_rowtime,
+    > INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('10', 'Gizmo', '1', '4', '5', '2024-05-20 09:30:00');
     > 
-    >     o.id AS order_id,
-    >     o.product,
-    >     o.create_date AS o_create_date,
-    >     o.buyer_id AS o_buyer_id,
-    > 
-    >     b.id AS b_buyer_id,
-    >     b.name AS buyer_name,
-    >     b.create_date AS b_create_date
-    > FROM streamtostream_stream_order_intake o
-    > FULL OUTER JOIN streamtostream_stream_buyer_intake b
-    >     WITHIN 5 MINUTES GRACE PERIOD 10 MINUTES
-    >     ON o.buyer_id = b.id
-    > EMIT CHANGES;
+    > INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('4', 'Charlie4', '2024-05-20 09:40:00');
     > ```
 
-- Pull request to JOIN stream to **check result**.
+- **Result:** 
+    - Joined result as `stream buyer` event is 10 mins after `stream order` event.
+    - Joined stream's **ROWTIME** is `2024-05-20T09:40:00` (MAX of A & B's timestamp).
+    > ```
+    > +------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+
+    > |ROW_TIME          |A_ROW_TIME        |P_ROW_TIME        |ORDER_ID          |O_BUYER_ID        |B_BUYER_ID        |B_CREATE_DATE     |PG_ID             |PG_NAME           |PG_CREATE_DATE    |
+    > +------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+
+    > |2024-05-20T09:40:0|2024-05-20T09:40:0|null              |10                |4                 |4                 |2024-05-20T09:40:0|null              |null              |null              |
+    > |0.000             |0.000             |                  |                  |                  |                  |0.000             |                  |                  |                  |
+    > ```
+
+---
+### `Order` Event
+- Insert **dummy data**.
     > ```sql
-    > SELECT FROM_UNIXTIME(ROWTIME) as row_time, * FROM streamtostream_stream_join_order_buyer EMIT CHANGES;
+    > INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('11', 'Gizmo', '1', '4', '5', '2024-05-20 09:45:00');
     > ```
 
+- **Result:**: 
+    - Joined result as `stream order` event is 5 mins after `stream buyer` event.
+    - Joined stream's **ROWTIME** is `2024-05-20T09:45:00` (MAX of A & B's timestamp).
+    > ```
+    > +------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+
+    > |ROW_TIME          |JOIN_KEY          |ORDER_ID          |PRODUCT           |PRODUCT_GROUP_ID  |O_CREATE_DATE     |O_BUYER_ID        |B_BUYER_ID        |BUYER_NAME        |B_CREATE_DATE     |
+    > +------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+
+    > |2024-05-20T09:45:0|4                 |11                |Gizmo             |5                 |2024-05-20T09:45:0|4                 |4                 |Charlie4          |2024-05-20T09:40:0|
+    > |0.000             |                  |                  |                  |                  |0.000             |                  |                  |                  |0.000             |
+    > ```
 
+---
+### `Product Group` Event
+- Insert **dummy data**.
+    > ```sql
+    > INSERT INTO `product_group` (`id`, `name`, `supplier_id`, `create_date`) VALUES ('5', 'Clothing5', '1', '2024-05-20 10:10:00');
+    > ```
 
+- **Result:** Both events are joined, as both timestamp `09:40` and `09:45` is in `product group` window `10:10 - 30mins = 09:40` to `10:10 + 15mins = 10:25`.
+    > ```
+    > +------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+
+    > |ROW_TIME          |A_ROW_TIME        |P_ROW_TIME        |ORDER_ID          |O_BUYER_ID        |B_BUYER_ID        |B_CREATE_DATE     |PG_ID             |PG_NAME           |PG_CREATE_DATE    |
+    > +------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+
+    > |2024-05-20T10:10:0|2024-05-20T09:40:0|2024-05-20T10:10:0|10                |4                 |4                 |2024-05-20T09:40:0|5                 |Clothing5         |2024-05-20T10:10:0|
+    > |0.000             |0.000             |0.000             |                  |                  |                  |0.000             |                  |                  |0.000             |
+    > |2024-05-20T10:10:0|2024-05-20T09:45:0|2024-05-20T10:10:0|11                |4                 |4                 |2024-05-20T09:40:0|5                 |Clothing5         |2024-05-20T10:10:0|
+    > |0.000             |0.000             |0.000             |                  |                  |                  |0.000             |                  |                  |0.000             |
+    > ```
+
+- Insert **dummy data**.
+    > ```sql
+    > UPDATE `product_group` SET `create_date` = '2024-05-20 10:15:00' WHERE `product_group`.`id` = 5;
+    > ```
+
+- **Result:** Only `9:45` events are joined, as timestamp `09:45` is in `product group` window `10:15 - 30mins = 09:45` to `10:15 + 15mins = 10:30`.
+    > ```
+    > +------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+
+    > |ROW_TIME          |A_ROW_TIME        |P_ROW_TIME        |ORDER_ID          |O_BUYER_ID        |B_BUYER_ID        |B_CREATE_DATE     |PG_ID             |PG_NAME           |PG_CREATE_DATE    |
+    > +------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+------------------+
+    > |2024-05-20T10:15:0|2024-05-20T09:45:0|2024-05-20T10:15:0|11                |4                 |4                 |2024-05-20T09:40:0|5                 |Clothing5         |2024-05-20T10:15:0|
+    > |0.000             |0.000             |0.000             |                  |                  |                  |0.000             |                  |                  |0.000             |
+    > ```

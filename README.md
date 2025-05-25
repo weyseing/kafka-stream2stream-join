@@ -5,19 +5,14 @@
 - Table in `MySQL DB` will be used as dummy data.
 
 # Supported Join Types
-- **Reference:** https://docs.confluent.io/platform/current/ksqldb/developer-guide/joins/join-streams-and-tables.html#join-capabilities
 - ksqlDB supports these stream-stream joins (all need a `WITHIN` time window).
     - `FULL OUTER JOIN`
     - `INNER JOIN`
     - `LEFT JOIN` / `LEFT OUTER JOIN`
     - `RIGHT JOIN` / `RIGHT OUTER JOIN`
 
-#  Join Event Flow
-- In ksqlDB, **which stream** the event comes from **affects how the joins are processed**, according to the pattern `(((A JOIN B) JOIN C) JOIN D)`.
-- **Event from C:** If it can't match with results from streams A and B, it stops and won't be joined with D.
-- **Event from D:** It always tries to join with previous streams, no matter what happened before, but only produces a result if everything matches in the end.
-
-### Example: Event from Stream C
+# Reset
+To reset for practice, follow these steps.
 - Ensure **remove dummy data** to avoid conflict.
     > ```sql
     > DELETE FROM `order` WHERE id > 9;
@@ -28,36 +23,38 @@
 
 - Ensure **recreate streams** to avoid conflict.
     > ```sql
-    > DROP STREAM streamtostream_stream_join;
     > DROP STREAM streamtostream_stream_supplier_intake;
     > DROP STREAM streamtostream_stream_product_group_intake;
     > DROP STREAM streamtostream_stream_buyer_intake;
     > DROP STREAM streamtostream_stream_order_intake;
     > ```
 
+# Multi-Join Flow
+In ksqlDB, the order of streams in a multi-stage join (`(((A JOIN B) JOIN C) JOIN D)`) impacts how events are processed:
+- **Event from C:** The event flow to stream C even there is no join result from `(A JOIN B)`.
+- **Event from B:** The event from stop at stream B if no join result from `(A JOIN B)`.
+
+---
+### Event from Stream C
 - Create **JOIN stream** below.
     > ```sql
     > CREATE STREAM streamtostream_stream_join WITH 
     > (KAFKA_TOPIC='streamtostream_stream_join', VALUE_FORMAT='AVRO') AS
     > SELECT 
-    >     -- ROWKEY AS join_rowkey, -- only for OUTER JOIN
     >     o.id AS order_id,
     >     o.product AS product,
     >     o.create_date AS o_create_date,
     >     
-    >     -- buyer
     >     o.buyer_id AS o_buyer_id,
     >     b.id AS b_buyer_id,
     >     b.name AS buyer_name,
     >     b.create_date AS b_create_date,
     >     
-    >     -- product group
     >     o.product_group_id AS o_product_group_id,
     >     p.id AS p_product_group_id,
     >     p.name AS product_group_name,
     >     p.create_date AS p_create_date,
     > 
-    >     -- supplier
     >     p.supplier_id AS o_supplier_id,
     >     s.id AS s_supplier_id,
     >     s.name AS supplier_name,
@@ -89,97 +86,28 @@
 
 - **Result:** Since the event happened in Stream C `(product_group)`, it appears in the results for Stream C even though there's no matching data from Stream A `(order)` or Stream B `(buyer)`.
     > ```
-    > +----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+
-    > |O_SUPPLIER_ID   |ORDER_ID        |PRODUCT         |O_CREATE_DATE   |O_BUYER_ID      |B_BUYER_ID      |BUYER_NAME      |B_CREATE_DATE   |O_PRODUCT_GROUP_|P_PRODUCT_GROUP_|PRODUCT_GROUP_NA|P_CREATE_DATE   |S_SUPPLIER_ID   |SUPPLIER_NAME   |S_CREATE_DATE   |
-    > |                |                |                |                |                |                |                |                |ID              |ID              |ME              |                |                |                |                |
-    > +----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+
-    > |4               |null            |null            |null            |null            |null            |null            |null            |null            |5               |Clothing5       |2024-05-13T09:30|4               |TopSupplies4    |2024-05-13T09:30|
-    > |                |                |                |                |                |                |                |                |                |                |                |:00.000         |                |                |:00.000         |
+    > +-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+
+    > |O_SUPPLIER_|ORDER_ID   |PRODUCT    |O_CREATE_DA|O_BUYER_ID |B_BUYER_ID |BUYER_NAME |B_CREATE_DA|O_PRODUCT_G|P_PRODUCT_G|PRODUCT_GRO|P_CREATE_DA|S_SUPPLIER_|SUPPLIER_NA|S_CREATE_DA|
+    > |ID         |           |           |TE         |           |           |           |TE         |ROUP_ID    |ROUP_ID    |UP_NAME    |TE         |ID         |ME         |TE         |
+    > +-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+
+    > |4          |null       |null       |null       |null       |null       |null       |null       |null       |5          |Clothing5  |2024-05-13T|4          |TopSupplies|2024-05-13T|
+    > |           |           |           |           |           |           |           |           |           |           |           |09:30:00.00|           |4          |09:30:00.00|
+    > |           |           |           |           |           |           |           |           |           |           |           |0          |           |           |0          |
     > ```
 
-### Example: Event from Stream B
-- Ensure **remove dummy data** to avoid conflict.
-    > ```sql
-    > DELETE FROM `order` WHERE id > 9;
-    > DELETE FROM `buyer` WHERE id > 3;
-    > DELETE FROM `product_group` WHERE id > 4;
-    > DELETE FROM `supplier` WHERE id > 3;
-    > ```
-
-- Ensure **recreate streams** to avoid conflict.
-    > ```sql
-    > DROP STREAM streamtostream_stream_join;
-    > DROP STREAM streamtostream_stream_supplier_intake;
-    > DROP STREAM streamtostream_stream_product_group_intake;
-    > DROP STREAM streamtostream_stream_buyer_intake;
-    > DROP STREAM streamtostream_stream_order_intake;
-    > ```
-
-- Create **JOIN stream** below.
-    > ```sql
-    > CREATE STREAM streamtostream_stream_join WITH 
-    > (KAFKA_TOPIC='streamtostream_stream_join', VALUE_FORMAT='AVRO') AS
-    > SELECT 
-    >     -- ROWKEY AS join_rowkey, -- only for OUTER JOIN
-    >     o.id AS order_id,
-    >     o.product AS product,
-    >     o.create_date AS o_create_date,
-    >     
-    >     -- buyer
-    >     o.buyer_id AS o_buyer_id,
-    >     b.id AS b_buyer_id,
-    >     b.name AS buyer_name,
-    >     b.create_date AS b_create_date,
-    >     
-    >     -- product group
-    >     o.product_group_id AS o_product_group_id,
-    >     p.id AS p_product_group_id,
-    >     p.name AS product_group_name,
-    >     p.create_date AS p_create_date,
-    > 
-    >     -- supplier
-    >     p.supplier_id AS o_supplier_id,
-    >     s.id AS s_supplier_id,
-    >     s.name AS supplier_name,
-    >     s.create_date AS s_create_date
-    > 
-    > FROM streamtostream_stream_order_intake o
-    > LEFT JOIN streamtostream_stream_buyer_intake b
-    >     WITHIN (5 MINUTES, 10 MINUTES)
-    >     ON o.buyer_id = b.id
-    > RIGHT JOIN streamtostream_stream_product_group_intake p
-    >     WITHIN (15 MINUTES, 30 MINUTES)
-    >     ON o.product_group_id = p.id
-    > LEFT JOIN streamtostream_stream_supplier_intake s
-    >     WITHIN (20 MINUTES, 40 MINUTES)
-    >     ON p.supplier_id = s.id
-    > EMIT CHANGES;
-    > ```
-
-- Pull request to JOIN stream to **check result**.
-    ```sql
-    SELECT * FROM streamtostream_stream_join EMIT CHANGES;
-    ```
-
+### Event from Stream B
 - Insert **dummy data**.
-    > ```sql
-    > INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('10', 'Gizmo', '2', '999', '5', '2024-05-12 09:30:00');
-    > INSERT INTO `product_group` (`id`, `name`, `supplier_id`, `create_date`) VALUES ('5', 'Clothing5', '4', '2024-05-12 09:30:00');
-    > INSERT INTO `supplier` (`id`, `name`, `create_date`) VALUES ('4', 'TopSupplies4', '2024-05-12 09:30:00');
-    > INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('4', 'Charlie4', '2024-05-12 09:30:00');
-    > ```
+```sql
+INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('10', 'Gizmo', '2', '3', '6', '2024-05-20 09:30:00');
 
-- **Result:** If an event happens in Stream B (`buyer`), there's no output because it doesn't find a match with Stream A (`order`). So, it won't continue to Stream C (`product_group`) or Stream D (`supplier`), even if there are matches in those streams for Stream A.
-    > ```
-    > +----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+
-    > |O_SUPPLIER_ID   |ORDER_ID        |PRODUCT         |O_CREATE_DATE   |O_BUYER_ID      |B_BUYER_ID      |BUYER_NAME      |B_CREATE_DATE   |O_PRODUCT_GROUP_|P_PRODUCT_GROUP_|PRODUCT_GROUP_NA|P_CREATE_DATE   |S_SUPPLIER_ID   |SUPPLIER_NAME   |S_CREATE_DATE   |
-    > |                |                |                |                |                |                |                |                |ID              |ID              |ME              |                |                |                |                |
-    > +----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+
-    > |4               |null            |null            |null            |null            |null            |null            |null            |null            |5               |Clothing5       |2024-05-12T09:30|null            |null            |null            |
-    > |                |                |                |                |                |                |                |                |                |                |                |:00.000         |                |                |                |
-    > |4               |null            |null            |null            |null            |null            |null            |null            |null            |5               |Clothing5       |2024-05-12T09:30|4               |TopSupplies4    |2024-05-12T09:30|
-    > |                |                |                |                |                |                |                |                |                |                |                |:00.000         |                |                |:00.000         |
-    > ```
+INSERT INTO `product_group` (`id`, `name`, `supplier_id`, `create_date`) VALUES ('6', 'Clothing6', '6', '2024-05-20 09:30:00');
+
+INSERT INTO `supplier` (`id`, `name`, `create_date`) VALUES ('6', 'TopSupplies6', '2024-05-20 09:30:00');
+
+INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('5', 'Buyer5', '2024-05-20 09:30:00');
+```
+
+- **Result:** No join result as no join result from `(A JOIN B)`.
 
 # Multi-Stage Stream Joins: 2+1 Stream
 This section details a ksqlDB multi-stage join where an initial stream `(Orders joined with Buyers)` is subsequently joined with a third stream `(Product Group)`, highlighting the impact of event timing and join windows.
@@ -425,7 +353,7 @@ This happens because the `A_ROW_TIME` (`10:20:00`) of the potential matching rec
     >     b.create_date AS b_create_date
     > FROM streamtostream_stream_order_intake o
     > FULL OUTER JOIN streamtostream_stream_buyer_intake b
-    >     WITHIN (5 MINUTES, 10 MINUTES) GRACE PERIOD 2 MINUTES
+    >     WITHIN 5 MINUTES GRACE PERIOD 10 MINUTES
     >     ON o.buyer_id = b.id
     > EMIT CHANGES;
     > ```

@@ -104,7 +104,7 @@ INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('5', 'Buyer5', '2024-0
 - **Result:** No join result as no join result from `(A JOIN B)`.
 
 
-# Cascading Stream Joins
+# Cascading Streams
 - This is to compare 2 methods:
     - **Cascading Join:** `2+1 Structure`
     - **3-Streams Join:** `((A JOIN B) JOIN C)` directly

@@ -1,7 +1,7 @@
 # Setup
 - Create docker network via `docker network create global-net`
 - Create all Kafka connectors in `connector` folder.
-- Create all Ksql streams/tables in `ksql` folder.
+- Create all Ksql streams/tables in `ksql` folder via `./tools/ksqldb_connect.sh`.
 - Table in `MySQL DB` will be used as dummy data.
 
 # Supported Join Types
@@ -230,3 +230,92 @@ INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('5', 'Buyer5', '2024-0
     > |2024-05-20T10:15:0|2024-05-20T09:45:0|2024-05-20T10:15:0|11                |4                 |4                 |2024-05-20T09:40:0|5                 |Clothing5         |2024-05-20T10:15:0|
     > |0.000             |0.000             |0.000             |                  |                  |                  |0.000             |                  |                  |0.000             |
     > ```
+
+# Window & Grace Period
+- **Window**
+    - Window of **stream A event** = `timestamp - 5mins` to `timestamp + 10mins`
+    - Window of **stream B event** = `timestamp - 10mins` to `timestamp + 5mins`
+
+- **Grace Period**
+    - Grace period of **stream A event** = window end `(timestamp + 10mins)` + grace period `(2 mins)`
+    - Grace period of **stream B event** = window end `(timestamp + 5mins)` + grace period `(2 mins)`
+
+- **ROWTIME of joined stream:** `MAX(stream A timestamp, stream B timestamp)`
+
+- Create **stream** below.
+    > ```sql
+    > CREATE STREAM streamtostream_stream_join_order_buyer WITH
+    > (KAFKA_TOPIC='streamtostream_stream_join_order_buyer', VALUE_FORMAT='AVRO') AS
+    > SELECT
+    >     ROWKEY AS join_key,
+    >     FROM_UNIXTIME(o.ROWTIME) AS o_rowtime,
+    >     FROM_UNIXTIME(b.ROWTIME) AS b_rowtime,
+    > 
+    >     o.id AS order_id,
+    >     o.product,
+    >     o.product_group_id,
+    >     o.create_date AS o_create_date,
+    >     o.buyer_id AS o_buyer_id,
+    > 
+    >     b.id AS b_buyer_id,
+    >     b.name AS buyer_name,
+    >     b.create_date AS b_create_date
+    > FROM streamtostream_stream_order_intake o
+    > FULL OUTER JOIN streamtostream_stream_buyer_intake b
+    >     WITHIN (5 MINUTES, 10 MINUTES) GRACE PERIOD 2 MINUTES
+    >     ON o.buyer_id = b.id
+    > EMIT CHANGES;
+    > ```
+
+---
+### Window
+- Create **dummy data**.
+    > ```sql
+    > INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('10', 'Gizmo', '2', '4', '3', '2024-05-20 10:30:00');
+    > ```
+
+- No join result as `buyer` event is 11mins after `order` event.
+    > ```sql
+    > INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('4', 'Charlie4', '2024-05-20 10:41:00');
+    > ```
+
+- **Result:** No join result as `buyer` event.
+    - Window of **order** `(10:30)` = `10:25` to `10:40`
+    - Window of **buyer** `(10:41)` = `10:31` to `10:46`
+    > ```sql
+    > INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('4', 'Charlie4', '2024-05-20 10:41:00');
+    > ```
+
+- **Result:** Has join result
+    - Window of **order** `(10:30)` = `10:25` to `10:40`
+    - Window of **buyer** `(10:40)` = `10:30` to `10:45`
+    > ```sql
+    > UPDATE `buyer` SET `create_date` = '2024-05-20 10:40:00' WHERE `buyer`.`id` = 4;
+    > ```
+
+- **Result:** Has join result
+    - Window of **order** `(10:30)` = `10:25` to `10:40`
+    - Window of **buyer** `(10:30)` = `10:20` to `10:35`
+    > ```sql
+    > UPDATE `buyer` SET `create_date` = '2024-05-20 10:30:00' WHERE `buyer`.`id` = 4;
+    > ```
+
+- **Result:** Has join result
+    - Window of **order** `(10:30)` = `10:25` to `10:40`
+    - Window of **buyer** `(10:25)` = `10:15` to `10:30`
+    > ```sql
+    > UPDATE `buyer` SET `create_date` = '2024-05-20 10:25:00' WHERE `buyer`.`id` = 4;
+    > ```
+
+- **Result:** Null result from `order`
+    - Window of **order** `(10:30)` = `10:25` to `10:40`
+    - Window of **buyer** `(10:24)` = `10:14` to `10:29`
+    > ```sql
+    > UPDATE `buyer` SET `create_date` = '2024-05-20 10:24:00' WHERE `buyer`.`id` = 4;
+    > ```
+
+### Grace Period
+- Create **dummy data**.
+```sql
+
+```

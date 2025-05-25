@@ -314,8 +314,111 @@ INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('5', 'Buyer5', '2024-0
     > UPDATE `buyer` SET `create_date` = '2024-05-20 10:24:00' WHERE `buyer`.`id` = 4;
     > ```
 
+---
 ### Grace Period
-- Create **dummy data**.
-```sql
+If stream's window has NO success joined event, it will **emit NULL when grace period passed.**
 
-```
+- **ORDER expired triggered by ORDER event**
+    - **Result:** `Latest timestamp (13:42)` still IN grace perion `timestamp (13:30)` + `window (10mins)` + `grace period (2mins)`
+        > ```sql
+        > INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('13', 'Gizmo', '2', '5', '3', '2024-05-20 13:30:00');
+        > 
+        > INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('101', 'Gizmo', '2', '5', '3', '2024-05-20 13:42:00');
+        > ```
+
+    - **Result:** `Latest timestamp (13:43)` EXCEED grace period `timestamp (13:30)` + `window (10mins)` + `grace period (2mins)`
+        > ```sql
+        > UPDATE `order` SET `create_date` = '2024-05-20 13:43:00' WHERE `order`.`id` = 101;
+        > ```
+
+        > ```
+        > +---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+
+        > |ROW_TIME       |JOIN_KEY       |O_ROWTIME      |B_ROWTIME      |ORDER_ID       |PRODUCT        |PRODUCT_GROUP_I|O_CREATE_DATE  |O_BUYER_ID     |B_BUYER_ID     |BUYER_NAME     |B_CREATE_DATE  |
+        > |               |               |               |               |               |               |D              |               |               |               |               |               |
+        > +---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+
+        > |2024-05-20T13:3|5              |2024-05-20T13:3|null           |13             |Gizmo          |3              |2024-05-20T13:3|5              |null           |null           |null           |
+        > |0:00.000       |               |0:00.000       |               |               |               |               |0:00.000       |               |               |               |               |
+        > ```
+
+- **ORDER expired triggered by BUYER event**
+    - **Result:** `Latest timestamp (15:43)` EXCEED grace period `timestamp (15:30)` + `window (10mins)` + `grace period (2mins)`
+        > ```sql
+        > INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('14', 'Gizmo', '2', '5', '3', '2024-05-20 15:30:00');
+        > 
+        > UPDATE `buyer` SET `create_date` = '2024-05-20 15:43:00' WHERE `buyer`.`id` = 3;
+        > ```
+
+        > ```
+        > +---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+
+        > |ROW_TIME       |JOIN_KEY       |O_ROWTIME      |B_ROWTIME      |ORDER_ID       |PRODUCT        |PRODUCT_GROUP_I|O_CREATE_DATE  |O_BUYER_ID     |B_BUYER_ID     |BUYER_NAME     |B_CREATE_DATE  |
+        > |               |               |               |               |               |               |D              |               |               |               |               |               |
+        > +---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+
+        > |2024-05-20T15:3|5              |2024-05-20T15:3|null           |14             |Gizmo          |3              |2024-05-20T15:3|5              |null           |null           |null           |
+        > |0:00.000       |               |0:00.000       |               |               |               |               |0:00.000       |               |               |               |               |
+        > ```
+
+- **BUYER expired triggered by BUYER event**
+    - **Result:** `Latest timestamp (17:37)` still IN grace perion `timestamp (17:30)` + `window (5mins)` + `grace period (2mins)`
+        > ```sql
+        > INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('6', 'Charlie6', '2024-05-20 17:30:00');
+        > 
+        > INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('7', 'Charlie7', '2024-05-20 17:37:00');
+        > ```
+
+    - **Result:** `Latest timestamp (17:38)` EXCEED grace period `timestamp (17:30)` + `window (5mins)` + `grace period (2mins)`
+        > ```sql
+        > UPDATE `buyer` SET `create_date` = '2024-05-20 17:38:00' WHERE `buyer`.`id` = 7;
+        > ```
+
+        > ```
+        > +---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+
+        > |ROW_TIME       |JOIN_KEY       |O_ROWTIME      |B_ROWTIME      |ORDER_ID       |PRODUCT        |PRODUCT_GROUP_I|O_CREATE_DATE  |O_BUYER_ID     |B_BUYER_ID     |BUYER_NAME     |B_CREATE_DATE  |
+        > |               |               |               |               |               |               |D              |               |               |               |               |               |
+        > +---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+
+        > |2024-05-20T17:3|6              |null           |2024-05-20T17:3|null           |null           |null           |null           |null           |6              |Charlie6       |2024-05-20T17:3|
+        > |0:00.000       |               |               |0:00.000       |               |               |               |               |               |               |               |0:00.000       |
+        > ```
+
+- **BUYER expired triggered by ORDER event**
+    - **Result:** If `Latest timestamp (18:38)` directly exceed grace period, then it will expired.
+        > ```sql
+        > INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('8', 'Charlie8', '2024-05-20 18:30:00');
+        > 
+        > INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('15', 'Gizmo', '2', '5', '3', '2024-05-20 18:38:00');
+        > ```
+
+        > ```
+        > +---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+
+        > |ROW_TIME       |JOIN_KEY       |O_ROWTIME      |B_ROWTIME      |ORDER_ID       |PRODUCT        |PRODUCT_GROUP_I|O_CREATE_DATE  |O_BUYER_ID     |B_BUYER_ID     |BUYER_NAME     |B_CREATE_DATE  |
+        > |               |               |               |               |               |               |D              |               |               |               |               |               |
+        > +---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+
+        > |2024-05-20T18:3|8              |null           |2024-05-20T18:3|null           |null           |null           |null           |null           |8              |Charlie8       |2024-05-20T18:3|
+        > |0:00.000       |               |               |0:00.000       |               |               |               |               |               |               |               |0:00.000       |
+        > ```
+
+
+    - **Result (WEIRD):** If `Latest timestamp (19:37)` arrive then `(19:38)` arrive which NOT direcly exceed grace period, then event's grace period will changed 
+        - from `timestamp (19:30)` + `***window (5mins)***` + `grace period (2mins)`
+        - to `timestamp (19:30)` + `***window (10mins)***` + `grace period (2mins)`
+    
+        > ```sql
+        > INSERT INTO `buyer` (`id`, `name`, `create_date`) VALUES ('9', 'Charlie9', '2024-05-20 19:30:00');
+        > 
+        > INSERT INTO `order` (`id`, `product`, `amount`, `buyer_id`, `product_group_id`, `create_date`) VALUES ('16', 'Gizmo', '2', '5', '3', '2024-05-20 19:37:00');
+        > 
+        > UPDATE `order` SET `create_date` = '2024-05-20 19:38:00' WHERE `order`.`id` = 16;
+        > 
+        > UPDATE `order` SET `create_date` = '2024-05-20 19:42:00' WHERE `order`.`id` = 16;
+        > 
+        > UPDATE `order` SET `create_date` = '2024-05-20 19:43:00' WHERE `order`.`id` = 16;
+        > ```
+
+        > ```
+        > +---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+
+        > |ROW_TIME       |JOIN_KEY       |O_ROWTIME      |B_ROWTIME      |ORDER_ID       |PRODUCT        |PRODUCT_GROUP_I|O_CREATE_DATE  |O_BUYER_ID     |B_BUYER_ID     |BUYER_NAME     |B_CREATE_DATE  |
+        > |               |               |               |               |               |               |D              |               |               |               |               |               |
+        > +---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+
+        > |2024-05-20T19:3|9              |null           |2024-05-20T19:3|null           |null           |null           |null           |null           |9              |Charlie9       |2024-05-20T19:3|
+        > |0:00.000       |               |               |0:00.000       |               |               |               |               |               |               |               |0:00.000       |
+        > ```
+
